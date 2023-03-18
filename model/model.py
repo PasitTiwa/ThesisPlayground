@@ -218,7 +218,7 @@ class ModTransformer(nn.Module):
         return x, all_hidden
 
 class VisionTransformer(nn.Module):
-    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int):
+    def __init__(self, input_resolution: int, patch_size: int, width: int, layers: int, heads: int, output_dim: int, get_all_token: bool = True):
         super().__init__()
         self.input_resolution = input_resolution
         self.output_dim = output_dim
@@ -233,6 +233,7 @@ class VisionTransformer(nn.Module):
 
         self.ln_post = LayerNorm(width)
         self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
+        self.get_all_token = get_all_token
 
     def forward(self, x: torch.Tensor):
         x = self.conv1(x)  # shape = [*, width, grid, grid]
@@ -246,8 +247,11 @@ class VisionTransformer(nn.Module):
         x = self.transformer(x)
         x = x.permute(1, 0, 2)  # LND -> NLD 
         # N = batch_size, L = n_patch, d = embed_dim
-        # x = self.ln_post(x[:, 0, :]) # select only [CLS] embeding
-        x = self.ln_post(x)
+        if self.get_all_token:
+            x = self.ln_post(x)
+        else:
+            x = self.ln_post(x[:, 0, :]) # select only [CLS] embeding
+        
 
         if self.proj is not None:
             x = x @ self.proj
@@ -268,8 +272,8 @@ class CLIP(nn.Module):
                  vocab_size: int,
                  transformer_width: int,
                  transformer_heads: int,
-                 transformer_layers: int
-                 ):
+                 transformer_layers: int,
+                 get_all_token: bool = True):
         super().__init__()
 
         self.context_length = context_length
@@ -291,7 +295,8 @@ class CLIP(nn.Module):
                 width=vision_width,
                 layers=vision_layers,
                 heads=vision_heads,
-                output_dim=embed_dim
+                output_dim=embed_dim,
+                get_all_token=get_all_token
             )
 
         self.transformer = Transformer(
@@ -411,7 +416,7 @@ def convert_weights(model: nn.Module):
     model.apply(_convert_weights_to_fp16)
 
 
-def build_model(state_dict: dict):
+def build_model(state_dict: dict, get_all_token: bool = True):
     vit = "visual.proj" in state_dict
 
     if vit:
@@ -439,7 +444,8 @@ def build_model(state_dict: dict):
     model = CLIP(
         embed_dim,
         image_resolution, vision_layers, vision_width, vision_patch_size,
-        context_length, vocab_size, transformer_width, transformer_heads, transformer_layers
+        context_length, vocab_size, transformer_width, transformer_heads, transformer_layers,
+        get_all_token
     )
 
     for key in ["input_resolution", "context_length", "vocab_size"]:
